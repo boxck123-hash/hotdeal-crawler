@@ -45,7 +45,7 @@ def extract_price(text: str) -> Optional[int]:
     return None
 
 
-# ─── 네이버 카페 게시판 직접 API ────────────────────────────────────────
+# ─── 네이버 카페 게시판 HTML 크롤링 ────────────────────────────────────
 async def crawl_naver_cafe_api(
     keyword: str,
     client: httpx.AsyncClient,
@@ -59,41 +59,39 @@ async def crawl_naver_cafe_api(
     menu_id = cafe_info["menu_id"]
     slug = cafe_info["slug"]
     try:
-        # 네이버 카페 게시판 목록 API (비로그인 공개글)
         url = (
-            f"https://apis.naver.com/cafe-web/cafe2/ArticleListV2.json"
-            f"?cafeId={cafe_id}&menuId={menu_id}"
-            f"&search.query={quote(keyword)}&search.searchBy=0"
-            f"&pageSize=20&currentPage=1"
+            f"https://cafe.naver.com/ArticleList.nhn"
+            f"?search.clubid={cafe_id}&search.menuid={menu_id}"
+            f"&search.boardtype=L&search.searchBy=0"
+            f"&search.query={quote(keyword)}&search.page=1"
         )
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
             "Referer": f"https://cafe.naver.com/{slug}",
-            "Accept": "application/json",
+            "Accept-Language": "ko-KR,ko;q=0.9",
         }
-        r = await client.get(url, headers=headers, timeout=15)
-        print(f"[{cafe_name}] 응답 코드: {r.status_code}")
-        if r.status_code != 200:
-            print(f"[{cafe_name}] 오류 본문: {r.text[:200]}")
-            return results
+        r = await client.get(url, headers=headers, timeout=15, follow_redirects=True)
+        print(f"[{cafe_name}] 응답 코드: {r.status_code}, 길이: {len(r.text)}")
 
-        data = r.json()
-        articles = (
-            data.get("message", {})
-            .get("result", {})
-            .get("articleList", {})
-            .get("items", [])
-        )
-        print(f"[{cafe_name}] 게시글 수: {len(articles)}")
+        soup = BeautifulSoup(r.text, "html.parser")
+        rows = soup.select("tr.article-board-list, .article-board tbody tr")
+        if not rows:
+            rows = soup.select("table.article-board tr")
+        print(f"[{cafe_name}] 파싱된 행 수: {len(rows)}")
 
-        for item in articles:
-            title = item.get("subject", "")
-            if not title:
+        for row in rows:
+            title_el = row.select_one("td.td_article a.article, a.article")
+            if not title_el:
                 continue
+            title = title_el.get_text(strip=True)
             if keyword and keyword.lower() not in title.lower():
                 continue
-            article_id = item.get("articleId", "")
-            link = f"https://cafe.naver.com/ArticleRead.nhn?cafeId={cafe_id}&articleid={article_id}"
+            href = title_el.get("href", "")
+            link = "https://cafe.naver.com" + href if href.startswith("/") else href
             price_match = re.search(r"[\d,]+원", title)
             price_text = price_match.group(0) if price_match else ""
             price = extract_price(price_text) if price_text else None
