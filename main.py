@@ -74,12 +74,14 @@ async def crawl_naver_cafe_api(
 
         data = r.json()
         items = data.get("items", [])
+        print(f"[{cafe_name}] API 응답 건수: {len(items)}")
+        if items:
+            print(f"[{cafe_name}] 샘플 링크: {items[0].get('link','')}")
 
         for item in items:
-            cafe_url = item.get("cafename", "")
-            # 해당 카페 글만 필터링
             link = item.get("link", "")
-            if cafe_id and str(cafe_id) not in link:
+            cafe_id_val = NAVER_CAFE_IDS.get(cafe_name)
+            if cafe_id_val and str(cafe_id_val) not in link:
                 continue
             title = re.sub(r"<[^>]+>", "", item.get("title", ""))
             price = extract_price(title)
@@ -90,6 +92,7 @@ async def crawl_naver_cafe_api(
                 "price_text": "",
                 "link": link,
             })
+        print(f"[{cafe_name}] 필터 후 건수: {len(results)}")
     except Exception as e:
         print(f"[{cafe_name} 오류] {e}")
     return results
