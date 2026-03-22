@@ -64,7 +64,7 @@ async def crawl_naver_cafe_api(
     try:
         cafe_id = NAVER_CAFE_IDS.get(cafe_name)
         # 카페명 + 키워드로 검색
-        query = keyword
+        query = cafe_name + " " + keyword
         url = (
             f"https://openapi.naver.com/v1/search/cafearticle.json"
             f"?query={quote(query)}&display=20&start=1&sort=date"
@@ -89,9 +89,8 @@ async def crawl_naver_cafe_api(
             slug = NAVER_CAFE_SLUGS.get(cafe_name, "")
             cafe_id_val = NAVER_CAFE_IDS.get(cafe_name)
             # 슬러그 또는 카페ID 둘 중 하나라도 링크에 있으면 통과
-            if slug and cafe_id_val:
-                if slug not in link and str(cafe_id_val) not in link:
-                    continue
+            if slug and str(cafe_id_val) not in link and slug not in link:
+                continue
             title = re.sub(r"<[^>]+>", "", item.get("title", ""))
             price = extract_price(title)
             results.append({
