@@ -29,17 +29,11 @@ HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9",
 }
 
-# 네이버 카페별 cafeId
-NAVER_CAFE_IDS = {
-    "맘이베베": 29434212,
-    "맘스홀릭": 10094499,
-    "몰테일스토리": 21820768,
-}
-
-NAVER_CAFE_SLUGS = {
-    "맘이베베": "skybluezw4rh",
-    "맘스홀릭": "imsanbu",
-    "몰테일스토리": "malltail",
+# 네이버 카페별 cafeId + menuId + slug
+NAVER_CAFES = {
+    "맘이베베":     {"cafe_id": 29434212, "menu_id": 2,   "slug": "skybluezw4rh"},
+    "맘스홀릭":     {"cafe_id": 10094499, "menu_id": 599, "slug": "imsanbu"},
+    "몰테일스토리": {"cafe_id": 21820768, "menu_id": 98,  "slug": "malltail"},
 }
 
 
@@ -51,51 +45,66 @@ def extract_price(text: str) -> Optional[int]:
     return None
 
 
-# ─── 네이버 Open API (카페 검색) ────────────────────────────────────────
+# ─── 네이버 카페 게시판 직접 API ────────────────────────────────────────
 async def crawl_naver_cafe_api(
     keyword: str,
     client: httpx.AsyncClient,
     cafe_name: str,
 ) -> list[dict]:
     results = []
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        print(f"[{cafe_name}] 네이버 API 키 없음")
+    cafe_info = NAVER_CAFES.get(cafe_name)
+    if not cafe_info:
         return results
+    cafe_id = cafe_info["cafe_id"]
+    menu_id = cafe_info["menu_id"]
+    slug = cafe_info["slug"]
     try:
-        cafe_id = NAVER_CAFE_IDS.get(cafe_name)
-        # 카페명 + 키워드로 검색
-        query = cafe_name + " " + keyword
+        # 네이버 카페 게시판 목록 API (비로그인 공개글)
         url = (
-            f"https://openapi.naver.com/v1/search/cafearticle.json"
-            f"?query={quote(query)}&display=20&start=1&sort=date"
+            f"https://apis.naver.com/cafe-web/cafe2/ArticleListV2.json"
+            f"?cafeId={cafe_id}&menuId={menu_id}"
+            f"&search.query={quote(keyword)}&search.searchBy=0"
+            f"&pageSize=20&currentPage=1"
         )
         headers = {
-            "X-Naver-Client-Id": NAVER_CLIENT_ID,
-            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": f"https://cafe.naver.com/{slug}",
+            "Accept": "application/json",
         }
         r = await client.get(url, headers=headers, timeout=15)
+        print(f"[{cafe_name}] 응답 코드: {r.status_code}")
         if r.status_code != 200:
-            print(f"[{cafe_name}] API 오류 {r.status_code}: {r.text}")
+            print(f"[{cafe_name}] 오류 본문: {r.text[:200]}")
             return results
 
         data = r.json()
-        items = data.get("items", [])
-        print(f"[{cafe_name}] API 응답 건수: {len(items)}")
-        if items:
-            print(f"[{cafe_name}] 샘플 링크: {items[0].get('link','')}")
+        articles = (
+            data.get("message", {})
+            .get("result", {})
+            .get("articleList", {})
+            .get("items", [])
+        )
+        print(f"[{cafe_name}] 게시글 수: {len(articles)}")
 
-        for item in items:
-            link = item.get("link", "")
-            title = re.sub(r"<[^>]+>", "", item.get("title", ""))
-            price = extract_price(title)
+        for item in articles:
+            title = item.get("subject", "")
+            if not title:
+                continue
+            if keyword and keyword.lower() not in title.lower():
+                continue
+            article_id = item.get("articleId", "")
+            link = f"https://cafe.naver.com/ArticleRead.nhn?cafeId={cafe_id}&articleid={article_id}"
+            price_match = re.search(r"[\d,]+원", title)
+            price_text = price_match.group(0) if price_match else ""
+            price = extract_price(price_text) if price_text else None
             results.append({
                 "community": cafe_name,
                 "title": title,
                 "price": price,
-                "price_text": "",
+                "price_text": price_text,
                 "link": link,
             })
-        print(f"[{cafe_name}] 필터 후 건수: {len(results)}")
+        print(f"[{cafe_name}] 키워드 필터 후: {len(results)}")
     except Exception as e:
         print(f"[{cafe_name} 오류] {e}")
     return results
