@@ -1,4 +1,6 @@
 import os
+import sys
+print("서버 시작", flush=True, file=sys.stderr)
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -53,7 +55,7 @@ async def crawl_naver_cafe_api(
 ) -> list[dict]:
     results = []
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        print(f"[{cafe_name}] 네이버 API 키 없음")
+        print(f"[{cafe_name}] 네이버 API 키 없음", flush=True)
         return results
     try:
         cafe_id = NAVER_CAFE_IDS.get(cafe_name)
@@ -277,7 +279,31 @@ async def search(
         "results": flat,
     }
 
+@app.get("/test-naver")
+async def test_naver():
+    client_id = os.environ.get("NAVER_CLIENT_ID", "")
+    client_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
+    if not client_id:
+        return {"ok": False, "message": "API 키 없음"}
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            "https://openapi.naver.com/v1/search/cafearticle.json?query=사과&display=3",
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            timeout=10
+        )
+        return {"status": r.status_code, "body": r.json()}
 
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+```
+
+저장 후 배포 완료되면:
+```
+https://hotdeal-crawler.onrender.com/test-naver
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
