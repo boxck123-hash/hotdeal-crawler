@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -16,6 +17,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+NAVER_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -23,24 +27,17 @@ HEADERS = {
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://cafe.naver.com/",
 }
 
-NAVER_API_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "ko-KR,ko;q=0.9",
-    "Referer": "https://cafe.naver.com/",
-    "Origin": "https://cafe.naver.com",
+# 네이버 카페별 cafeId
+NAVER_CAFE_IDS = {
+    "맘이베베": 29434212,
+    "맘스홀릭": 10094499,
+    "몰테일스토리": 21820768,
 }
 
 
 def extract_price(text: str) -> Optional[int]:
-    """텍스트에서 가격(숫자) 추출"""
     text = text.replace(",", "").replace(" ", "")
     matches = re.findall(r"\d{3,}", text)
     if matches:
@@ -48,47 +45,44 @@ def extract_price(text: str) -> Optional[int]:
     return None
 
 
-# ─── 네이버카페 공통 크롤러 ─────────────────────────────────────────────
-async def crawl_naver_cafe(
+# ─── 네이버 Open API (카페 검색) ────────────────────────────────────────
+async def crawl_naver_cafe_api(
     keyword: str,
     client: httpx.AsyncClient,
-    cafe_id: int,
-    menu_id: int,
     cafe_name: str,
 ) -> list[dict]:
     results = []
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        print(f"[{cafe_name}] 네이버 API 키 없음")
+        return results
     try:
+        cafe_id = NAVER_CAFE_IDS.get(cafe_name)
+        # 카페명 + 키워드로 검색
+        query = keyword
         url = (
-            f"https://apis.naver.com/cafe-web/cafe2/ArticleListV2.json"
-            f"?cafeId={cafe_id}&menuId={menu_id}"
-            f"&search.query={quote(keyword)}&search.searchBy=0"
-            f"&pageSize=20&currentPage=1"
+            f"https://openapi.naver.com/v1/search/cafearticle.json"
+            f"?query={quote(query)}&display=20&start=1&sort=date"
         )
-        r = await client.get(url, headers=NAVER_API_HEADERS, timeout=15)
-
+        headers = {
+            "X-Naver-Client-Id": NAVER_CLIENT_ID,
+            "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+        }
+        r = await client.get(url, headers=headers, timeout=15)
         if r.status_code != 200:
-            print(f"[{cafe_name}] HTTP {r.status_code}")
+            print(f"[{cafe_name}] API 오류 {r.status_code}: {r.text}")
             return results
 
         data = r.json()
-        articles = (
-            data.get("message", {})
-            .get("result", {})
-            .get("articleList", {})
-            .get("items", [])
-        )
+        items = data.get("items", [])
 
-        for item in articles:
-            title = item.get("subject", "")
-            if not title:
+        for item in items:
+            cafe_url = item.get("cafename", "")
+            # 해당 카페 글만 필터링
+            link = item.get("link", "")
+            if cafe_id and str(cafe_id) not in link:
                 continue
-            if keyword and keyword.lower() not in title.lower():
-                continue
-
-            article_id = item.get("articleId", "")
-            link = f"https://cafe.naver.com/ArticleRead.nhn?cafeId={cafe_id}&articleid={article_id}"
+            title = re.sub(r"<[^>]+>", "", item.get("title", ""))
             price = extract_price(title)
-
             results.append({
                 "community": cafe_name,
                 "title": title,
@@ -96,20 +90,19 @@ async def crawl_naver_cafe(
                 "price_text": "",
                 "link": link,
             })
-
     except Exception as e:
         print(f"[{cafe_name} 오류] {e}")
     return results
 
 
 async def crawl_mam_ibebe(keyword: str, client: httpx.AsyncClient) -> list[dict]:
-    return await crawl_naver_cafe(keyword, client, cafe_id=29434212, menu_id=2, cafe_name="맘이베베")
+    return await crawl_naver_cafe_api(keyword, client, "맘이베베")
 
 async def crawl_momsholic(keyword: str, client: httpx.AsyncClient) -> list[dict]:
-    return await crawl_naver_cafe(keyword, client, cafe_id=10094499, menu_id=599, cafe_name="맘스홀릭")
+    return await crawl_naver_cafe_api(keyword, client, "맘스홀릭")
 
 async def crawl_malltail(keyword: str, client: httpx.AsyncClient) -> list[dict]:
-    return await crawl_naver_cafe(keyword, client, cafe_id=21820768, menu_id=98, cafe_name="몰테일스토리")
+    return await crawl_naver_cafe_api(keyword, client, "몰테일스토리")
 
 
 # ─── 뽐뿌 ───────────────────────────────────────────────────────────────
@@ -125,7 +118,6 @@ async def crawl_ppomppu(keyword: str, client: httpx.AsyncClient) -> list[dict]:
             if not title_el:
                 continue
             title = title_el.get_text(strip=True)
-            # 가격은 제목에서 추출 (예: 12,900원)
             price_match = re.search(r'[\d,]+원', title)
             price_text = price_match.group(0) if price_match else ""
             price = extract_price(price_text) if price_text else None
@@ -157,7 +149,9 @@ async def crawl_fmkorea(keyword: str, client: httpx.AsyncClient) -> list[dict]:
             if not title_el:
                 continue
             title = title_el.get_text(strip=True)
-            price = extract_price(title)
+            price_match = re.search(r'[\d,]+원', title)
+            price_text = price_match.group(0) if price_match else ""
+            price = extract_price(price_text) if price_text else None
             href = title_el.get("href", "")
             link = "https://www.fmkorea.com" + href if href.startswith("/") else href
             if keyword.lower() in title.lower():
@@ -165,7 +159,7 @@ async def crawl_fmkorea(keyword: str, client: httpx.AsyncClient) -> list[dict]:
                     "community": "에펨코리아",
                     "title": title,
                     "price": price,
-                    "price_text": "",
+                    "price_text": price_text,
                     "link": link,
                 })
     except Exception as e:
@@ -186,7 +180,9 @@ async def crawl_theqoo(keyword: str, client: httpx.AsyncClient) -> list[dict]:
             if not title_el:
                 continue
             title = title_el.get_text(strip=True)
-            price = extract_price(title)
+            price_match = re.search(r'[\d,]+원', title)
+            price_text = price_match.group(0) if price_match else ""
+            price = extract_price(price_text) if price_text else None
             href = title_el.get("href", "")
             link = "https://theqoo.net" + href if href.startswith("/") else href
             if keyword.lower() in title.lower():
@@ -194,7 +190,7 @@ async def crawl_theqoo(keyword: str, client: httpx.AsyncClient) -> list[dict]:
                     "community": "더쿠",
                     "title": title,
                     "price": price,
-                    "price_text": "",
+                    "price_text": price_text,
                     "link": link,
                 })
     except Exception as e:
@@ -209,10 +205,10 @@ async def crawl_quasarzone(keyword: str, client: httpx.AsyncClient) -> list[dict
         url = f"https://quasarzone.com/bbs/qb_saleinfo?sca=&sfl=wr_subject&stx={quote(keyword)}"
         r = await client.get(url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("div.market-info-list-wrap li, ul.market-info-list li")
+        rows = soup.select("div.market-info-list-wrap li, ul.market-info-list li, .market-info-cont")
         for row in rows:
-            title_el = row.select_one("p.tit a, .title a")
-            price_el = row.select_one("span.price, .market-price")
+            title_el = row.select_one("p.tit a, .tit a, h1 a, h2 a, h3 a")
+            price_el = row.select_one("span.price, .market-price, .price")
             if not title_el:
                 continue
             title = title_el.get_text(strip=True)
