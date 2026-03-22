@@ -1,6 +1,4 @@
 import os
-import sys
-print("서버 시작", flush=True, file=sys.stderr)
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -38,6 +36,12 @@ NAVER_CAFE_IDS = {
     "몰테일스토리": 21820768,
 }
 
+NAVER_CAFE_SLUGS = {
+    "맘이베베": "skybluezw4rh",
+    "맘스홀릭": "imsanbu",
+    "몰테일스토리": "malltail",
+}
+
 
 def extract_price(text: str) -> Optional[int]:
     text = text.replace(",", "").replace(" ", "")
@@ -55,7 +59,7 @@ async def crawl_naver_cafe_api(
 ) -> list[dict]:
     results = []
     if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        print(f"[{cafe_name}] 네이버 API 키 없음", flush=True)
+        print(f"[{cafe_name}] 네이버 API 키 없음")
         return results
     try:
         cafe_id = NAVER_CAFE_IDS.get(cafe_name)
@@ -82,9 +86,12 @@ async def crawl_naver_cafe_api(
 
         for item in items:
             link = item.get("link", "")
+            slug = NAVER_CAFE_SLUGS.get(cafe_name, "")
             cafe_id_val = NAVER_CAFE_IDS.get(cafe_name)
-            if cafe_id_val and str(cafe_id_val) not in link:
-                continue
+            # 슬러그 또는 카페ID 둘 중 하나라도 링크에 있으면 통과
+            if slug and cafe_id_val:
+                if slug not in link and str(cafe_id_val) not in link:
+                    continue
             title = re.sub(r"<[^>]+>", "", item.get("title", ""))
             price = extract_price(title)
             results.append({
@@ -279,31 +286,7 @@ async def search(
         "results": flat,
     }
 
-@app.get("/test-naver")
-async def test_naver():
-    client_id = os.environ.get("NAVER_CLIENT_ID", "")
-    client_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
-    if not client_id:
-        return {"ok": False, "message": "API 키 없음"}
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            "https://openapi.naver.com/v1/search/cafearticle.json?query=사과&display=3",
-            headers={
-                "X-Naver-Client-Id": client_id,
-                "X-Naver-Client-Secret": client_secret,
-            },
-            timeout=10
-        )
-        return {"status": r.status_code, "body": r.json()}
 
-@app.get("/health")
-async def health():
-    return {"status": "healthy"}
-```
-
-저장 후 배포 완료되면:
-```
-https://hotdeal-crawler.onrender.com/test-naver
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
