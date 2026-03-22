@@ -122,12 +122,13 @@ async def crawl_ppomppu(keyword: str, client: httpx.AsyncClient) -> list[dict]:
         rows = soup.select("tr.baseList, tr.baseList-e")
         for row in rows[:20]:
             title_el = row.select_one("a.baseList-title")
-            price_el = row.select_one("td.baseList-space")
             if not title_el:
                 continue
             title = title_el.get_text(strip=True)
-            price_text = price_el.get_text(strip=True) if price_el else ""
-            price = extract_price(price_text)
+            # 가격은 제목에서 추출 (예: 12,900원)
+            price_match = re.search(r'[\d,]+원', title)
+            price_text = price_match.group(0) if price_match else ""
+            price = extract_price(price_text) if price_text else None
             link_tag = title_el.get("href", "")
             link = "https://www.ppomppu.co.kr/zboard/" + link_tag if link_tag else ""
             if keyword.lower() in title.lower():
