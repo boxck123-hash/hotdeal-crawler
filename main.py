@@ -59,6 +59,7 @@ async def crawl_naver_cafe_api(
     menu_id = cafe_info["menu_id"]
     slug = cafe_info["slug"]
     try:
+        # 네이버 카페는 iframe 내부 URL로 직접 요청
         url = (
             f"https://cafe.naver.com/ArticleList.nhn"
             f"?search.clubid={cafe_id}&search.menuid={menu_id}"
@@ -73,24 +74,35 @@ async def crawl_naver_cafe_api(
             ),
             "Referer": f"https://cafe.naver.com/{slug}",
             "Accept-Language": "ko-KR,ko;q=0.9",
+            "X-Requested-With": "XMLHttpRequest",
         }
         r = await client.get(url, headers=headers, timeout=15, follow_redirects=True)
         print(f"[{cafe_name}] 응답 코드: {r.status_code}, 길이: {len(r.text)}")
+        print(f"[{cafe_name}] HTML 앞부분: {r.text[:300]}")
 
         soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("tr.article-board-list, .article-board tbody tr")
-        if not rows:
-            rows = soup.select("table.article-board tr")
+        # 다양한 셀렉터 시도
+        rows = (
+            soup.select("tr.article-board-list") or
+            soup.select(".article-board tbody tr") or
+            soup.select("table.article-board tr") or
+            soup.select(".board-list tbody tr") or
+            soup.select("ul.article-board li")
+        )
         print(f"[{cafe_name}] 파싱된 행 수: {len(rows)}")
+        # 셀렉터 디버그
+        all_links = soup.select("a[href*='articleid']")
+        print(f"[{cafe_name}] articleid 링크 수: {len(all_links)}")
+        if all_links:
+            print(f"[{cafe_name}] 첫 링크: {all_links[0].get('href','')} / 텍스트: {all_links[0].get_text(strip=True)[:50]}")
 
-        for row in rows:
-            title_el = row.select_one("td.td_article a.article, a.article")
-            if not title_el:
+        for a in all_links:
+            title = a.get_text(strip=True)
+            if not title or len(title) < 3:
                 continue
-            title = title_el.get_text(strip=True)
             if keyword and keyword.lower() not in title.lower():
                 continue
-            href = title_el.get("href", "")
+            href = a.get("href", "")
             link = "https://cafe.naver.com" + href if href.startswith("/") else href
             price_match = re.search(r"[\d,]+원", title)
             price_text = price_match.group(0) if price_match else ""
